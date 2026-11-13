@@ -7,6 +7,7 @@
 adding a resumable transfer engine, adaptive rate limiting, recursive folder crawling,
 checksum verification, three user interfaces, and a clean Python API.
 
+[![CI](https://github.com/moustaph97/gdown2/actions/workflows/ci.yml/badge.svg)](https://github.com/moustaph97/gdown2/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Code style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
