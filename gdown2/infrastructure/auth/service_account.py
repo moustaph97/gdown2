@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
@@ -66,8 +67,8 @@ class ServiceAccountAuth:
 
     def _mint_token_via_google_auth(self) -> str:
         try:
-            from google.auth.transport.requests import Request  # type: ignore[import-not-found]
-            from google.oauth2 import service_account  # type: ignore[import-not-found]
+            requests_transport = import_module("google.auth.transport.requests")
+            service_account = import_module("google.oauth2.service_account")
         except ImportError as exc:
             raise AuthenticationError(
                 "Service account JWT signing requires 'google-auth' to be installed "
@@ -80,12 +81,12 @@ class ServiceAccountAuth:
             "private_key": self._private_key,
             "token_uri": self._token_uri,
         }
-        creds = service_account.Credentials.from_service_account_info(
+        credentials = service_account.Credentials.from_service_account_info(
             info,
             scopes=[DRIVE_READONLY_SCOPE],
         )
-        creds.refresh(Request())
-        if not creds.token:
+        credentials.refresh(requests_transport.Request())
+        if not credentials.token:
             raise AuthenticationError("Failed to obtain access token for service account.")
-        return str(creds.token)
+        return str(credentials.token)
 
