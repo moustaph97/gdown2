@@ -146,4 +146,8 @@ topic-specific pages.
    ```
 
 5. Verify the wheel contents include `py.typed` and all subpackages.
-6. Tag the release and publish to your package index.
+6. Create a GitHub release with a `vX.Y.Z` tag. The `Publish to PyPI` workflow handles
+   the upload through Trusted Publishing.
+
+See [Releasing and PyPI publishing](releasing.md) for the one-time PyPI setup and the
+full release process.

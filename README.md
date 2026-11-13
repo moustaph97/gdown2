@@ -339,6 +339,7 @@ permission or quota failures.
 - [Architecture](docs/architecture.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Development guide](docs/development.md)
+- [Releasing and PyPI publishing](docs/releasing.md)
 
 ---
 
