@@ -15,6 +15,9 @@ from pathlib import Path, PurePosixPath
 
 from gdown2.domain.errors import PathTraversalError
 
+_TEMP_SUFFIX_BYTES = len(b".mpart")  # 6 bytes (covers both ".part" and ".mpart")
+_DEFAULT_MAX_TOTAL_PATH_LENGTH = 240 if os.name == "nt" else 4096
+
 # Characters forbidden on Windows (and '/' + NUL on POSIX).
 _FORBIDDEN_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
@@ -36,7 +39,8 @@ class PathPolicy:
     """Rules for converting remote Drive item names into safe local paths."""
 
     max_segment_length: int = 200
-    max_total_path_length: int = 240
+    max_segment_bytes: int = 255 - _TEMP_SUFFIX_BYTES
+    max_total_path_length: int = _DEFAULT_MAX_TOTAL_PATH_LENGTH
     replacement_char: str = "_"
     _seen_paths: dict[PurePosixPath, set[str]] = field(default_factory=dict, repr=False)
 
@@ -55,10 +59,13 @@ class PathPolicy:
             cleaned = f"_{cleaned}"
             stem, dot, ext = self._split_extension(cleaned)
 
-        if len(cleaned) > self.max_segment_length:
-            suffix = f"{dot}{ext}"
-            budget = max(1, self.max_segment_length - len(suffix))
-            cleaned = f"{stem[:budget].rstrip('. ')}{suffix}"
+        suffix = f"{dot}{ext}"
+        cleaned = self._truncate_with_suffix(
+            stem,
+            suffix,
+            max_chars=self.max_segment_length,
+            max_bytes=self.max_segment_bytes,
+        )
 
         return cleaned or fallback
 
@@ -86,8 +93,12 @@ class PathPolicy:
 
         while candidate.lower() in used:
             tag = f" ({counter})"
-            budget = max(1, self.max_segment_length - len(suffix) - len(tag))
-            candidate = f"{stem[:budget]}{tag}{suffix}"
+            candidate = self._truncate_with_suffix(
+                stem,
+                f"{tag}{suffix}",
+                max_chars=self.max_segment_length,
+                max_bytes=self.max_segment_bytes,
+            )
             counter += 1
 
         used.add(candidate.lower())
@@ -111,9 +122,9 @@ class PathPolicy:
                 f"Resolved path {target} escapes destination root {resolved_root}"
             ) from exc
 
-        # Enforce total path length budget, reserving room for the ".part" suffix.
+        # Enforce total path length budget, reserving room for the ".part"/".mpart" suffix.
         target_str = os.fspath(target)
-        part_suffix = ".part"
+        part_suffix = ".mpart"
         if (
             len(target_str) + len(part_suffix) > self.max_total_path_length
             and len(relative_path.parts) > 0
@@ -126,6 +137,33 @@ class PathPolicy:
                 target = target.with_name(short_leaf)
 
         return target
+
+    @staticmethod
+    def _truncate_with_suffix(
+        stem: str,
+        suffix: str,
+        *,
+        max_chars: int,
+        max_bytes: int,
+    ) -> str:
+        """Truncate ``stem`` so ``stem + suffix`` fits within character and UTF-8 byte limits."""
+        full = f"{stem}{suffix}"
+        if len(full) <= max_chars and len(full.encode("utf-8")) <= max_bytes:
+            return full
+
+        char_budget = max(1, max_chars - len(suffix))
+        trimmed_stem = stem[:char_budget]
+
+        suffix_bytes = len(suffix.encode("utf-8"))
+        byte_budget = max(1, max_bytes - suffix_bytes)
+        encoded_stem = trimmed_stem.encode("utf-8")
+        if len(encoded_stem) > byte_budget:
+            trimmed_stem = encoded_stem[:byte_budget].decode("utf-8", errors="ignore")
+            if not trimmed_stem and stem:
+                trimmed_stem = stem[0]
+
+        trimmed_stem = trimmed_stem.rstrip(". ") or (stem[:1] if stem else "_")
+        return f"{trimmed_stem}{suffix}"
 
     @staticmethod
     def _split_extension(name: str) -> tuple[str, str, str]:

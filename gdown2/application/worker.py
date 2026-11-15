@@ -60,9 +60,12 @@ class DownloadWorker:
 
         if task.stale_part:
             self._sink.discard_part(task.part_path)
+            self._sink.discard_part(task.mpart_path)
             task.stale_part = False
             task.resume_offset = 0
             task.bytes_done = 0
+        elif task.mpart_path.exists():
+            self._sink.discard_part(task.mpart_path)
 
         if task.bytes_total:
             remaining = max(0, task.bytes_total - task.resume_offset)
@@ -104,8 +107,9 @@ class DownloadWorker:
                     self._concurrency_policy.on_rate_limit()
 
                 if isinstance(exc, ChecksumMismatchError):
-                    # Discard corrupted .part file so the retry starts clean from byte 0.
+                    # Discard corrupted .part/.mpart file so the retry starts clean from byte 0.
                     self._sink.discard_part(task.part_path)
+                    self._sink.discard_part(task.mpart_path)
                     task.resume_offset = 0
                     task.bytes_done = 0
 
@@ -221,67 +225,76 @@ class DownloadWorker:
         task.bytes_total = total_size
         file_lock = asyncio.Lock()
 
-        with self._sink.open_random_access_part(task.part_path, total_size) as handle:
+        try:
+            with self._sink.open_random_access_part(task.mpart_path, total_size) as handle:
 
-            async def _fetch_part(start: int, end: int) -> None:
-                expected = end - start + 1
-                offset = start
-                written = 0
-                async with self._source.open_download_stream(
-                    task.item,
-                    start_byte=start,
-                    end_byte=end,
-                ) as media:
-                    if media.status_code != 206:
+                async def _fetch_part(start: int, end: int) -> None:
+                    expected = end - start + 1
+                    offset = start
+                    written = 0
+                    async with self._source.open_download_stream(
+                        task.item,
+                        start_byte=start,
+                        end_byte=end,
+                    ) as media:
+                        if media.status_code != 206:
+                            raise TransientNetworkError(
+                                f"Server ignored multipart Range request for {task.item.name!r} "
+                                f"(HTTP {media.status_code}).",
+                                item_id=task.item.id,
+                            )
+                        if (
+                            media.content_length is not None
+                            and media.content_length != expected
+                        ):
+                            raise TransientNetworkError(
+                                f"Unexpected multipart Content-Length for {task.item.name!r}: "
+                                f"expected {expected}, got {media.content_length}.",
+                                item_id=task.item.id,
+                            )
+                        async for chunk in media.chunks:
+                            if not chunk:
+                                continue
+                            await self._wait_if_paused(task)
+                            self._check_cancelled(task)
+                            async with file_lock:
+                                handle.seek(offset)
+                                handle.write(chunk)
+                            n = len(chunk)
+                            offset += n
+                            written += n
+                            task.bytes_done += n
+                            self._reporter.on_task_progress(task, n)
+
+                    if written != expected:
                         raise TransientNetworkError(
-                            f"Server ignored multipart Range request for {task.item.name!r} "
-                            f"(HTTP {media.status_code}).",
+                            f"Incomplete multipart range for {task.item.name!r}: "
+                            f"expected {expected} bytes, got {written}.",
                             item_id=task.item.id,
                         )
-                    if media.content_length is not None and media.content_length != expected:
-                        raise TransientNetworkError(
-                            f"Unexpected multipart Content-Length for {task.item.name!r}: "
-                            f"expected {expected}, got {media.content_length}.",
-                            item_id=task.item.id,
-                        )
-                    async for chunk in media.chunks:
-                        if not chunk:
-                            continue
-                        await self._wait_if_paused(task)
-                        self._check_cancelled(task)
-                        async with file_lock:
-                            handle.seek(offset)
-                            handle.write(chunk)
-                        n = len(chunk)
-                        offset += n
-                        written += n
-                        task.bytes_done += n
-                        self._reporter.on_task_progress(task, n)
 
-                if written != expected:
-                    raise TransientNetworkError(
-                        f"Incomplete multipart range for {task.item.name!r}: "
-                        f"expected {expected} bytes, got {written}.",
-                        item_id=task.item.id,
-                    )
+                part_tasks = [
+                    asyncio.create_task(_fetch_part(start, end)) for start, end in ranges
+                ]
+                try:
+                    await asyncio.gather(*part_tasks)
+                finally:
+                    for part_task in part_tasks:
+                        if not part_task.done():
+                            part_task.cancel()
+                    await asyncio.gather(*part_tasks, return_exceptions=True)
 
-            part_tasks = [
-                asyncio.create_task(_fetch_part(start, end)) for start, end in ranges
-            ]
-            try:
-                await asyncio.gather(*part_tasks)
-            finally:
-                for part_task in part_tasks:
-                    if not part_task.done():
-                        part_task.cancel()
-                await asyncio.gather(*part_tasks, return_exceptions=True)
-
-        self._verifier.verify_file(
-            task.part_path,
-            task.item,
-            expected_size=total_size,
-        )
-        self._sink.promote_part(task.part_path, task.local_path)
+            self._verifier.verify_file(
+                task.mpart_path,
+                task.item,
+                expected_size=total_size,
+            )
+            self._sink.promote_part(task.mpart_path, task.local_path)
+        except BaseException:
+            task.bytes_done = 0
+            task.resume_offset = 0
+            self._sink.discard_part(task.mpart_path)
+            raise
 
     async def _wait_if_paused(self, task: DownloadTask) -> None:
         if self._pause_event is not None and not self._pause_event.is_set():

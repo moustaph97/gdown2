@@ -245,6 +245,115 @@ async def test_resume_416_range_not_satisfiable_promotes_complete_part(tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_interrupted_multipart_download_cleans_up_mpart_and_resumes_safely(
+    tmp_path: Path,
+) -> None:
+    import asyncio
+
+    from gdown2.domain.errors import DownloadCancelledError
+    from gdown2.domain.policies import RangePolicy
+
+    file_id = "1MultipartCancel_1234"
+    full_payload = b"ABCD" * 256  # 1024 bytes
+    local_path = tmp_path / "weights.bin"
+    mpart_path = tmp_path / "weights.bin.mpart"
+    part_path = tmp_path / "weights.bin.part"
+
+    # Web mode item without MD5
+    item = DriveItem(id=file_id, name="weights.bin", size=len(full_payload), md5=None)
+    cancel_event = asyncio.Event()
+
+    with respx.mock(assert_all_called=False) as router:
+        def _cancel_mid_multipart(request: httpx.Request) -> httpx.Response:
+            range_hdr = request.headers.get("Range", "")
+            if range_hdr == "bytes=0-511":
+                cancel_event.set()
+                return httpx.Response(
+                    206,
+                    content=full_payload[:512],
+                    headers={
+                        "Content-Type": "application/octet-stream",
+                        "Content-Length": "512",
+                    },
+                )
+            return httpx.Response(
+                206,
+                content=full_payload[512:],
+                headers={
+                    "Content-Type": "application/octet-stream",
+                    "Content-Length": "512",
+                },
+            )
+
+        router.get("https://drive.usercontent.google.com/download").mock(
+            side_effect=_cancel_mid_multipart
+        )
+
+        async with HttpClient() as http:
+            worker = DownloadWorker(
+                DriveWebSource(http),
+                FileSystemSink(),
+                Verifier(),
+                Reporter(),
+                concurrency_policy=ConcurrencyPolicy(chunks_per_file=2),
+                range_policy=RangePolicy(min_multipart_size=512),
+                cancel_event=cancel_event,
+            )
+            task1 = Planner().plan_single(item, local_path).tasks[0]
+            with pytest.raises(DownloadCancelledError):
+                await worker.execute(task1)
+
+    # Cancelled multipart download must not leave a full-size .part or .mpart on disk
+    assert not mpart_path.exists()
+    assert not part_path.exists()
+    assert not local_path.exists()
+    assert task1.resume_offset == 0
+    assert task1.bytes_done == 0
+
+    # Even if a crash (SIGKILL) left an orphan .mpart with zero holes, the next run must
+    # discard it and download the real bytes instead of promoting zero-filled data on 416.
+    mpart_path.write_bytes(full_payload[:512] + b"\x00" * 512)
+
+    with respx.mock(assert_all_called=False) as router:
+        def _full_handler(request: httpx.Request) -> httpx.Response:
+            range_hdr = request.headers.get("Range", "")
+            if range_hdr == "bytes=0-511":
+                return httpx.Response(
+                    206,
+                    content=full_payload[:512],
+                    headers={"Content-Type": "application/octet-stream", "Content-Length": "512"},
+                )
+            if range_hdr == "bytes=512-1023":
+                return httpx.Response(
+                    206,
+                    content=full_payload[512:],
+                    headers={"Content-Type": "application/octet-stream", "Content-Length": "512"},
+                )
+            return httpx.Response(416)
+
+        router.get("https://drive.usercontent.google.com/download").mock(side_effect=_full_handler)
+
+        async with HttpClient() as http:
+            worker2 = DownloadWorker(
+                DriveWebSource(http),
+                FileSystemSink(),
+                Verifier(),
+                Reporter(),
+                concurrency_policy=ConcurrencyPolicy(chunks_per_file=2),
+                range_policy=RangePolicy(min_multipart_size=512),
+            )
+            task2 = Planner().plan_single(item, local_path).tasks[0]
+            assert task2.resume_offset == 0
+            result = await worker2.execute(task2)
+
+    assert result.state == TaskState.DONE
+    assert local_path.read_bytes() == full_payload
+    assert not mpart_path.exists()
+    assert not part_path.exists()
+
+
+
+@pytest.mark.asyncio
 async def test_429_rate_limit_and_checksum_mismatch_recovery(tmp_path: Path) -> None:
     file_id = "1FlakyFile_1234567890"
     good_payload = b"VERIFIED_PAYLOAD_BYTES"

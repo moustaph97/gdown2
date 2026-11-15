@@ -359,6 +359,16 @@ class DriveWebSource:
                 "Try again later or configure an API key / OAuth credentials.",
                 item_id=item_id,
             )
+        if (
+            "permission to download this file" in lower
+            or "only the owner and editors can download this file" in lower
+            or "viewers cannot download" in lower
+        ):
+            raise PermissionDeniedError(
+                "Owner has disabled downloading for viewers on this file "
+                "(only the owner and editors can download it).",
+                item_id=item_id,
+            )
         needs_access = (
             "you need access" in lower or "request access" in lower or "sign in" in lower
         )

@@ -7,6 +7,7 @@ folder trees, downloading files/folders, and resuming interrupted sessions.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -203,6 +204,10 @@ async def resume_directory(
                 continue
             dirs_set.add(local_path.parent)
             part_path = local_path.with_name(f"{local_path.name}.part")
+            mpart_path = local_path.with_name(f"{local_path.name}.mpart")
+            if mpart_path.exists():
+                with contextlib.suppress(OSError):
+                    mpart_path.unlink()
             offset = part_path.stat().st_size if part_path.exists() else 0
 
             item = DriveItem(

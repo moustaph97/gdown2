@@ -156,11 +156,17 @@ class Planner:
                 return task
 
         # Overwriting must never resume stale bytes from a previous transfer.
-        if self._existing_policy == ExistingFilePolicy.OVERWRITE and task.part_path.exists():
+        if self._existing_policy == ExistingFilePolicy.OVERWRITE and (
+            task.part_path.exists() or task.mpart_path.exists()
+        ):
             task.stale_part = True
             task.resume_offset = 0
             task.bytes_done = 0
             return task
+
+        # Interrupted multipart files contain sparse holes and cannot be linearly resumed.
+        if task.mpart_path.exists():
+            task.stale_part = True
 
         # Inspect .part file and saved TransferState for mid-stream resume.
         if self._existing_policy == ExistingFilePolicy.RESUME and task.part_path.exists():
@@ -172,6 +178,7 @@ class Planner:
                 task.resume_offset = 0
                 task.bytes_done = 0
             else:
+                task.stale_part = False
                 task.resume_offset = part_size
                 task.bytes_done = part_size
                 if saved and saved.etag and not task.etag:
