@@ -10,7 +10,7 @@ from gdown2.sdk import download, download_sync, get_info, get_tree, resume_direc
 try:
     __version__ = version("gdown2")
 except PackageNotFoundError:  # pragma: no cover - source checkout without installation
-    __version__ = "0.2.0"
+    __version__ = "0.2.1"
 
 __all__ = [
     "DownloadTask",

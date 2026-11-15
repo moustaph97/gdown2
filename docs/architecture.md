@@ -151,10 +151,14 @@ Workers never write directly to the final destination filename.
 ## Multipart downloads
 
 Large files can be split into inclusive byte ranges and fetched concurrently
-(`--chunks`). Each range must return `206 Partial Content` with the expected
-`Content-Length`. If a server ignores the range request, the transfer is retried rather
-than writing full-file bytes at a range offset. Sibling range tasks are cancelled when
-any range fails, preventing concurrent writes during retry.
+(`--chunks`). Multipart transfers pre-allocate an isolated `<filename>.mpart` file
+rather than `<filename>.part` so an interrupted multi-Range download (which contains
+sparse zero-filled holes) is never mistaken for a contiguous `.part` stream on resume
+and is automatically cleaned up on cancellation or failure. Each range must return
+`206 Partial Content` with the expected `Content-Length`. If a server ignores the range
+request, the transfer is retried rather than writing full-file bytes at a range offset.
+Sibling range tasks are cancelled when any range fails, preventing concurrent writes
+during retry.
 
 ## Rate limiting and adaptive concurrency
 
@@ -184,8 +188,9 @@ Google Drive throttles aggressive parallel connections from a single IP.
 - Prefixes reserved DOS device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1..9`, `LPT1..9`),
   including compound extensions such as `NUL.tar.gz`.
 - Disambiguates duplicate sibling names (`report.pdf`, `report (1).pdf`, ...).
-- Enforces segment and total path length budgets, reserving room for the `.part`
-  suffix.
+- Enforces both character and UTF-8 byte segment limits (≤ 249 bytes, reserving 6 bytes
+  for `.part`/`.mpart` within the 255-byte POSIX ceiling) and OS-aware total path length
+  budgets.
 - Verifies with `Path.relative_to()` that no resolved path escapes the output root.
 
 ## Error model

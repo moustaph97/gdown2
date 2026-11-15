@@ -184,6 +184,10 @@ class DownloadTask:
     def part_path(self) -> Path:
         return self.local_path.with_name(f"{self.local_path.name}.part")
 
+    @property
+    def mpart_path(self) -> Path:
+        return self.local_path.with_name(f"{self.local_path.name}.mpart")
+
 
 @dataclass(slots=True)
 class TransferState:

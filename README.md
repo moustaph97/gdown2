@@ -25,7 +25,7 @@ connections that drop mid-transfer.
 
 | Capability | What it means in practice |
 |---|---|
-| **Crash-safe resume** | Data is streamed to `<filename>.part`; completed files are promoted with an atomic `os.replace`. Interrupted transfers resume from the last byte. |
+| **Crash-safe resume** | Single-stream data is streamed to `<filename>.part` and resumed from the last byte; parallel multi-Range transfers write to an isolated `<filename>.mpart` scratch file so sparse files are never mistaken for completed downloads. Completed files are promoted with an atomic `os.replace`. |
 | **Google Drive API v3 + public web** | Works out of the box on public links, then transparently switches to the official API when given an API key, OAuth token, or service account. |
 | **Recursive folder crawling** | Full BFS traversal with pagination, shortcut-cycle protection, filename sanitization, and collision handling. |
 | **Two-level concurrency** | Parallel file downloads (`--workers`) plus optional multi-Range chunking for large files (`--chunks`). |
@@ -298,8 +298,10 @@ api_key = "AIza..."
 
 `gdown2` treats downloads as recoverable transactions rather than one-shot streams.
 
-- **Never writes directly to the final filename.** Incoming bytes go to
-  `<filename>.part`. The final file appears only after verification succeeds.
+- **Never writes directly to the final filename.** Single-stream bytes go to
+  `<filename>.part`; parallel multi-Range transfers use `<filename>.mpart` and clean it
+  up if interrupted, preventing sparse pre-allocated files from being misread as complete
+  on resume. The final file appears only after verification succeeds.
 - **Handles `206`, `200`, and `416` correctly.** If the server honours `Range`, the
   transfer resumes. If it ignores `Range` and returns `200`, the partial file is reset
   instead of being corrupted. If it returns `416`, the existing part is verified and

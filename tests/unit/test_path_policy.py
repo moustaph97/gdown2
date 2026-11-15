@@ -60,3 +60,27 @@ def test_path_traversal_rejected(tmp_path: Path) -> None:
     with pytest.raises(PathTraversalError):
         policy.resolve_local_path(tmp_path, PurePosixPath("../escape.txt"))
 
+
+def test_non_latin_multibyte_segment_truncation_respects_utf8_byte_limit() -> None:
+    policy = PathPolicy()
+    # 150 Chinese characters = 450 UTF-8 bytes + 4 bytes for ".txt" = 454 bytes (> 255 POSIX limit)
+    long_cjk = "中" * 150 + ".txt"
+    result = policy.sanitize_segment(long_cjk)
+    assert result.endswith(".txt")
+    # Must leave room for ".mpart" (6 bytes) within 255-byte filesystem limit.
+    assert len(result.encode()) <= 249
+    assert len(f"{result}.mpart".encode()) <= 255
+
+
+def test_non_latin_collision_resolution_respects_utf8_byte_limit() -> None:
+    policy = PathPolicy()
+    parent = PurePosixPath("Folder")
+    long_cjk = "あ" * 150 + ".bin"
+    first = policy.allocate_child_path(parent, long_cjk)
+    second = policy.allocate_child_path(parent, long_cjk)
+
+    assert first != second
+    assert second.name.endswith(" (1).bin")
+    assert len(second.name.encode("utf-8")) <= 249
+
+

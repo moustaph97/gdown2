@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gdown2"
-version = "0.2.0"
+version = "0.2.1"
 description = "Fast, resumable Google Drive file and folder downloader with async I/O, Rich CLI, and Textual TUI."
 readme = "README.md"
 requires-python = ">=3.11"

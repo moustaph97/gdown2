@@ -170,3 +170,21 @@ def test_planner_resume_keeps_part_on_matching_etag(tmp_path: Path) -> None:
     assert task.stale_part is False
     assert task.resume_offset == 4
     assert task.bytes_done == 4
+
+
+def test_planner_ignores_interrupted_mpart_for_resume(tmp_path: Path) -> None:
+    payload = b"0123456789" * 10
+    # Simulate web mode item (no MD5, only size)
+    item = DriveItem(id="web-id", name="large.bin", size=len(payload), md5=None)
+    local_path = tmp_path / "large.bin"
+    mpart_path = local_path.with_name("large.bin.mpart")
+    # Pre-allocated .mpart of full size filled with zeros
+    mpart_path.write_bytes(b"\x00" * len(payload))
+
+    plan = Planner().plan_single(item, local_path)
+    task = plan.tasks[0]
+
+    assert task.resume_offset == 0
+    assert task.bytes_done == 0
+    assert task.stale_part is True
+
